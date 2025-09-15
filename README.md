@@ -14,11 +14,12 @@ This project is a FastAPI-based microservice designed to provide scalable, high-
 
 - Python 3.12+
 - Git
+- Docker (for containerization)
 
 ### Clone the Repository
 
 ```bash
-git clone <REPO_URL>
+git clone https://github.com/peter-mwau/agent-microservice.git
 cd agent-microservice
 ```
 
@@ -48,6 +49,49 @@ uvicorn main:app --reload
 ```
 
 The API will be available at `http://127.0.0.1:8000` by default.
+
+## Docker Usage
+
+### Build the Docker Image
+
+```bash
+docker build -t your-dockerhub-username/agent-microservice:latest .
+```
+
+### Run the Docker Container
+
+```bash
+docker run -d -p 8000:8000 your-dockerhub-username/agent-microservice:latest
+```
+
+The API will be available at `http://localhost:8000`.
+
+### Push to Docker Hub
+
+1. Log in to Docker Hub:
+   ```bash
+   docker login
+   ```
+2. Tag your image (if not already tagged):
+
+   ```bash
+   docker tag agent-microservice your-dockerhub-username/agent-microservice:latest
+   ```
+
+3. Push the image:
+   ```bash
+   docker push your-dockerhub-username/agent-microservice:latest
+   ```
+
+#### Troubleshooting: Permission Denied Errors on Linux
+
+If you see errors like `permission denied while trying to connect to the Docker daemon socket`, your user likely does not have permission to access Docker. To fix this:
+
+```bash
+sudo usermod -aG docker $USER
+```
+
+Then **log out and log back in** (or reboot) for the group change to take effect. After that, try your Docker commands again.
 
 ## Project Structure
 
