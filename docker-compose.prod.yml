@@ -1,0 +1,52 @@
+version: "3.8"
+
+services:
+  agent-microservice:
+    build:
+      context: .
+      target: production
+    container_name: agent-microservice-prod
+    ports:
+      - "8000:8000"
+    environment:
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+      - MAIN_PLATFORM_SECRET=${MAIN_PLATFORM_SECRET}
+      - MAIN_PLATFORM_URL=${MAIN_PLATFORM_URL}
+      - MAX_OUTPUT_TOKENS=${MAX_OUTPUT_TOKENS:-300}
+      - TEMPERATURE=${TEMPERATURE:-0.7}
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 512M
+        reservations:
+          cpus: "0.25"
+          memory: 256M
+    networks:
+      - agent-network
+
+  nginx:
+    image: nginx:alpine
+    container_name: agent-nginx-prod
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx.prod.conf:/etc/nginx/nginx.conf:ro
+      - ./ssl:/etc/nginx/ssl:ro # Mount SSL certificates
+    depends_on:
+      - agent-microservice
+    networks:
+      - agent-network
+    restart: unless-stopped
+
+networks:
+  agent-network:
+    driver: bridge
