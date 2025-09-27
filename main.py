@@ -66,6 +66,19 @@ class AgentResponsePayload(BaseModel):
     text: str
     agent_id: str = "ai_agent_001"  # Identifier for your agent
 
+
+class TaggingRequest(BaseModel):
+    """Request model for text tagging endpoint."""
+    text: str
+    max_tags: int = 5  # Optional: maximum number of tags to return (default 5)
+
+
+class TaggingResponse(BaseModel):
+    """Response model for text tagging endpoint."""
+    text: str
+    tags: list[str]
+    confidence: str = "high"  # Could be "high", "medium", "low"
+
 # --- Helper Functions ---
 
 
@@ -119,6 +132,196 @@ async def call_gemini(prompt: str) -> str:
         return "I apologize, but I encountered a technical issue. Please try again in a moment."
 
 
+async def generate_tags(text: str, max_tags: int = 5) -> list[str]:
+    """Analyzes text and generates relevant tags using Gemini with intelligent acronym and compound term handling."""
+
+    # Enhanced prompt that encourages acronyms and compound terms
+    tag_prompt = f"""
+    You are an expert content analyzer. Analyze the following text and generate exactly {max_tags} unique, relevant tags.
+    
+    IMPORTANT INSTRUCTIONS:
+    - Generate smart, meaningful tags that capture key concepts
+    - Use common acronyms when applicable (e.g., "AI" for artificial intelligence, "ML" for machine learning, "IT" for information technology)
+    - Create compound terms for related concepts (e.g., "data-science", "web-development", "stock-market")
+    - Each tag should be 1-4 words maximum, lowercase (except for acronyms like AI, ML, IT, etc.)
+    - Focus on: main topics, themes, concepts, categories, industries, domains, technologies
+    - Avoid generic words like "text", "content", "information", "article", "about"
+    - Make tags specific and actionable
+    - Return ONLY the tags, one per line, no numbering or explanations
+    - Prioritize acronyms and compound terms over single generic words
+    
+    Examples of good tags:
+    - "AI" instead of "artificial intelligence" 
+    - "ML" instead of "machine learning"
+    - "data-science" instead of separate "data" and "science"
+    - "web-development" instead of "web" and "development"
+    - "climate-change" instead of "climate" and "change"
+    
+    Text to analyze:
+    "{text}"
+    
+    Generate {max_tags} smart tags:
+    """
+
+    try:
+        logger.info(
+            f"Sending enhanced prompt to Gemini for smart tag generation...")
+        response = await model.generate_content_async(
+            tag_prompt,
+            generation_config=genai.types.GenerationConfig(
+                max_output_tokens=200,  # More tokens for better responses
+                temperature=0.7,  # Balanced temperature for consistency with creativity
+            )
+        )
+
+        if not response or not response.text:
+            logger.warning("Empty response from Gemini API")
+            raise Exception("Empty response from Gemini")
+
+        # Parse the response to extract tags
+        tags_text = response.text.strip()
+        logger.info(f"Raw Gemini response for tags: {tags_text}")
+
+        # Clean and parse tags
+        lines = tags_text.split('\n')
+        tags = []
+
+        for line in lines:
+            # Remove numbering, bullets, and extra whitespace
+            clean_line = line.strip()
+            # Remove common prefixes (numbers, bullets, dashes, etc.)
+            import re
+            clean_line = re.sub(r'^[\d\.\)\-\*•\s]+', '', clean_line)
+            clean_line = clean_line.strip()
+
+            # Keep acronyms in uppercase, but make other terms lowercase
+            if clean_line:
+                # Check if it's likely an acronym (2-4 uppercase letters)
+                if re.match(r'^[A-Z]{2,4}$', clean_line):
+                    processed_line = clean_line  # Keep acronyms as-is
+                else:
+                    processed_line = clean_line.lower()
+
+                if len(processed_line) > 1 and processed_line not in tags:
+                    tags.append(processed_line)
+
+        logger.info(f"Parsed tags from Gemini: {tags}")
+
+        # If Gemini failed, use smart keyword extraction with acronym detection
+        if len(tags) < 2:
+            logger.info(
+                "Not enough tags from Gemini, using smart keyword extraction")
+            tags = smart_keyword_extraction(text, max_tags)
+
+        # Ensure we have at least 2 tags
+        if len(tags) < 2:
+            logger.info(
+                "Still not enough tags, adding intelligent fallback tags")
+            # Create contextual fallback tags based on text content
+            fallback_tags = create_contextual_fallback_tags(text)
+            for fallback_tag in fallback_tags:
+                if fallback_tag not in tags:
+                    tags.append(fallback_tag)
+                if len(tags) >= max_tags:
+                    break
+
+        # Return up to max_tags
+        final_tags = tags[:max_tags]
+        logger.info(f"Final generated smart tags: {final_tags}")
+        return final_tags
+
+    except Exception as e:
+        logger.error(f"Error generating tags: {e}")
+        logger.error(f"Exception type: {type(e).__name__}")
+        import traceback
+        logger.error(f"Full traceback: {traceback.format_exc()}")
+
+        # Emergency fallback with smart keyword extraction
+        try:
+            logger.info("Attempting smart emergency keyword extraction")
+            emergency_tags = smart_keyword_extraction(text, max_tags)
+            if len(emergency_tags) >= 2:
+                logger.info(
+                    f"Emergency smart tags generated: {emergency_tags}")
+                return emergency_tags
+        except Exception as emergency_e:
+            logger.error(
+                f"Smart emergency fallback also failed: {emergency_e}")
+
+        # Final fallback - varied contextual tags
+        return create_contextual_fallback_tags(text)[:max_tags]
+
+
+def smart_keyword_extraction(text: str, max_tags: int) -> list[str]:
+    """Extract keywords intelligently, creating acronyms and compound terms where appropriate."""
+    import re
+
+    # Define common acronym patterns
+    acronym_patterns = {
+        r'\b(artificial intelligence|AI)\b': 'AI',
+        r'\b(machine learning|ML)\b': 'ML',
+        r'\b(deep learning|DL)\b': 'DL',
+        r'\b(neural network|NN)\b': 'neural-networks',
+        r'\b(computer vision|CV)\b': 'computer-vision',
+        r'\b(natural language processing|NLP)\b': 'NLP',
+        r'\b(data science|data-science)\b': 'data-science',
+        r'\b(information technology|IT)\b': 'IT',
+        r'\b(user interface|UI)\b': 'UI',
+        r'\b(user experience|UX)\b': 'UX',
+        r'\b(application programming interface|API)\b': 'API',
+        r'\b(stock market)\b': 'stock-market',
+        r'\b(climate change)\b': 'climate-change',
+        r'\b(web development|web-development)\b': 'web-development',
+        r'\b(software engineering|software-engineering)\b': 'software-engineering',
+        r'\b(project management|project-management)\b': 'project-management',
+    }
+
+    text_lower = text.lower()
+    extracted_tags = []
+
+    # First, look for known acronym patterns
+    for pattern, tag in acronym_patterns.items():
+        if re.search(pattern, text_lower, re.IGNORECASE):
+            if tag not in extracted_tags:
+                extracted_tags.append(tag)
+
+    # Then extract meaningful compound terms and single words
+    words = re.findall(r'\b[a-zA-Z]{4,}\b', text)  # Words with 4+ characters
+    potential_tags = []
+
+    for word in words:
+        clean_word = word.lower()
+        if clean_word not in ['this', 'that', 'with', 'from', 'they', 'have', 'were', 'been', 'their', 'said', 'each', 'which', 'such', 'will', 'more', 'very', 'what', 'when', 'where', 'much', 'some', 'time', 'about', 'after', 'first', 'well', 'also']:
+            potential_tags.append(clean_word)
+
+    # Add unique meaningful words
+    for tag in potential_tags:
+        if tag not in extracted_tags and len(extracted_tags) < max_tags:
+            extracted_tags.append(tag)
+
+    return extracted_tags
+
+
+def create_contextual_fallback_tags(text: str) -> list[str]:
+    """Create intelligent fallback tags based on text content."""
+    text_lower = text.lower()
+
+    # Domain-specific fallback tags based on content
+    if any(word in text_lower for word in ['machine', 'learning', 'artificial', 'intelligence', 'neural', 'algorithm']):
+        return ['AI', 'ML', 'technology', 'algorithms', 'data-science']
+    elif any(word in text_lower for word in ['cooking', 'recipe', 'food', 'kitchen', 'dish']):
+        return ['cooking', 'food', 'recipes', 'culinary', 'kitchen']
+    elif any(word in text_lower for word in ['stock', 'market', 'investment', 'trading', 'financial']):
+        return ['finance', 'stock-market', 'investment', 'trading', 'economics']
+    elif any(word in text_lower for word in ['climate', 'environment', 'weather', 'temperature', 'carbon']):
+        return ['climate-change', 'environment', 'weather', 'sustainability', 'ecology']
+    elif any(word in text_lower for word in ['technology', 'software', 'computer', 'digital']):
+        return ['technology', 'software', 'digital', 'computing', 'tech']
+    else:
+        return ['general-topic', 'content-analysis', 'text-review', 'information', 'analysis']
+        return error_tags[:max_tags]
+
+
 async def post_to_main_platform(payload: AgentResponsePayload):
     """Sends the agent's response back to the main discussion platform."""
     async with httpx.AsyncClient() as client:
@@ -138,6 +341,64 @@ async def post_to_main_platform(payload: AgentResponsePayload):
 async def root():
     """Health check endpoint."""
     return {"message": "AI Agent Microservice is running!", "status": "OK"}
+
+
+@app.post("/tag", response_model=TaggingResponse)
+async def tag_text(request: TaggingRequest):
+    """
+    Analyzes the provided text and returns relevant tags.
+
+    This endpoint uses Gemini AI to analyze text content and generate
+    meaningful tags that describe the themes, topics, or categories
+    present in the text.
+    """
+    logger.info(
+        f"Received tagging request for text: '{request.text[:100]}...'")
+
+    # Validate input - check for minimum word count
+    if not request.text or not request.text.strip():
+        raise HTTPException(
+            status_code=400,
+            detail="Text cannot be empty"
+        )
+
+    word_count = len(request.text.strip().split())
+    if word_count < 5:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Text must contain at least 5 words. Current text has {word_count} words."
+        )
+
+    if request.max_tags < 2 or request.max_tags > 10:
+        raise HTTPException(
+            status_code=400,
+            detail="max_tags must be between 2 and 10"
+        )
+
+    try:
+        # Generate tags using Gemini
+        tags = await generate_tags(request.text, request.max_tags)
+
+        # Ensure we have at least 2 tags as specified in requirements
+        if len(tags) < 2:
+            tags = ["general", "content"] + tags
+            # Remove duplicates while preserving order
+            tags = list(dict.fromkeys(tags))
+
+        logger.info(f"Generated tags: {tags}")
+
+        return TaggingResponse(
+            text=request.text,
+            tags=tags[:request.max_tags],  # Ensure we don't exceed max_tags
+            confidence="high" if len(tags) >= 2 else "medium"
+        )
+
+    except Exception as e:
+        logger.error(f"Error in tag_text endpoint: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail="An error occurred while generating tags"
+        )
 
 
 @app.post("/webhook")
