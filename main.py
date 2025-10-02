@@ -36,8 +36,40 @@ if not MAIN_PLATFORM_SECRET:
 
 # --- Configure Gemini ---
 genai.configure(api_key=GEMINI_API_KEY)
-# Initialize the model (using Gemini 1.5 Flash for speed and cost, but you can use Gemini 1.5 Pro)
-model = genai.GenerativeModel('gemini-1.5-flash')
+
+# Let's try to list available models first to debug
+try:
+    available_models = genai.list_models()
+    logger.info("Available models:")
+    for model_info in available_models:
+        if 'generateContent' in model_info.supported_generation_methods:
+            logger.info(f"  - {model_info.name}")
+except Exception as e:
+    logger.error(f"Error listing models: {e}")
+
+# Try different model names based on what's actually available
+model_names_to_try = [
+    'models/gemini-2.5-flash',
+    'models/gemini-2.0-flash',
+    'models/gemini-flash-latest',
+    'models/gemini-pro-latest',
+    'models/gemini-2.5-pro',
+    'gemini-pro'
+]
+
+model = None
+for model_name in model_names_to_try:
+    try:
+        model = genai.GenerativeModel(model_name)
+        logger.info(f"Successfully initialized model: {model_name}")
+        break
+    except Exception as e:
+        logger.warning(f"Failed to initialize model {model_name}: {e}")
+        continue
+
+if model is None:
+    logger.error("Could not initialize any Gemini model!")
+    raise ValueError("No available Gemini model could be initialized")
 
 # --- Initialize FastAPI App ---
 app = FastAPI(
@@ -117,8 +149,13 @@ def build_prompt(user_query: str, user_name: str, message_history: list[str]) ->
 
 async def call_gemini(prompt: str) -> str:
     """Sends the prompt to the Gemini API and returns the response text."""
+    if model is None:
+        logger.error("Model not initialized!")
+        return "I apologize, but the AI model is not available. Please check the configuration."
+
     try:
-        # Generate content using the model
+        # Try async first
+        logger.info("Attempting async generation...")
         response = await model.generate_content_async(
             prompt,
             generation_config=genai.types.GenerationConfig(
@@ -127,9 +164,29 @@ async def call_gemini(prompt: str) -> str:
             )
         )
         return response.text
-    except Exception as e:
-        logger.error(f"Error calling Gemini API: {e}")
-        return "I apologize, but I encountered a technical issue. Please try again in a moment."
+    except Exception as async_error:
+        logger.warning(f"Async generation failed: {async_error}")
+
+        # Fallback to synchronous generation wrapped in async
+        try:
+            logger.info("Trying synchronous generation as fallback...")
+            import asyncio
+
+            def sync_generate():
+                return model.generate_content(
+                    prompt,
+                    generation_config=genai.types.GenerationConfig(
+                        max_output_tokens=MAX_OUTPUT_TOKENS,
+                        temperature=TEMPERATURE,
+                    )
+                )
+
+            response = await asyncio.get_event_loop().run_in_executor(None, sync_generate)
+            return response.text
+        except Exception as sync_error:
+            logger.error(
+                f"Both async and sync Gemini API calls failed. Async: {async_error}, Sync: {sync_error}")
+            return "I apologize, but I encountered a technical issue with the AI service. Please try again in a moment."
 
 
 async def generate_tags(text: str, max_tags: int = 5) -> list[str]:
